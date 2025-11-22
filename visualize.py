@@ -76,10 +76,60 @@ def plot_aov_clv(df):
 def plot_product_affinity(df):
     """Plots the top 15 most frequent product pairs."""
     if df is None: return
-    
-    top_15_pairs = df.nlargest(15, 'PurchaseCount')
-    top_15_pairs['Pair'] = top_15_pairs['Item_A'] + "  +  " + top_15_pairs['Item_B']
-    
+    top_15_pairs = df.nlargest(15, 'PurchaseCount').copy()
+
+    # Prefer the pre-computed PairLabel (created by analytic.py). If missing,
+    # fall back to descriptions or stock codes depending on what's present.
+    if 'PairLabel' in top_15_pairs.columns:
+        top_15_pairs['Pair'] = top_15_pairs['PairLabel']
+    else:
+        # If descriptions exist, use them (fall back to codes).
+        if 'Item_A_Desc' in top_15_pairs.columns and 'Item_B_Desc' in top_15_pairs.columns:
+            top_15_pairs['Pair'] = (
+                top_15_pairs['Item_A_Desc'].fillna(top_15_pairs.get('Item_A', top_15_pairs.get('Item_A_Code', ''))).astype(str)
+                + "  +  " +
+                top_15_pairs['Item_B_Desc'].fillna(top_15_pairs.get('Item_B', top_15_pairs.get('Item_B_Code', ''))).astype(str)
+            )
+        else:
+            # Final fallback: try Item_A/Item_B or Item_A_Code/Item_B_Code
+            a_col = 'Item_A' if 'Item_A' in top_15_pairs.columns else ('Item_A_Code' if 'Item_A_Code' in top_15_pairs.columns else None)
+            b_col = 'Item_B' if 'Item_B' in top_15_pairs.columns else ('Item_B_Code' if 'Item_B_Code' in top_15_pairs.columns else None)
+            if a_col and b_col:
+                top_15_pairs['Pair'] = top_15_pairs[a_col].astype(str) + "  +  " + top_15_pairs[b_col].astype(str)
+            else:
+                # As a last resort, stringify the index
+                top_15_pairs['Pair'] = top_15_pairs.index.astype(str)
+
+    # Ensure pair labels are compact and rendered as two lines: left item on line 1,
+    # '+ ' + right item on line 2. Truncate each side to keep the plot readable.
+    def _two_line_label(s, left_width=40, right_width=40):
+        if not isinstance(s, str):
+            s = str(s)
+        # Try common separators
+        sep = None
+        for candidate in ['\n+\n', '\n+ ', '  +  ', ' + ', '+']:
+            if candidate in s:
+                sep = candidate
+                break
+        if sep is None:
+            # No explicit separator: just truncate and return two-line string
+            left = s
+            right = ''
+        else:
+            left, right = s.split(sep, 1)
+        left = left.strip()
+        right = right.strip()
+        if len(left) > left_width:
+            left = left[:left_width-3] + '...'
+        if len(right) > right_width:
+            right = right[:right_width-3] + '...'
+        if right:
+            return f"{left}\n+ {right}"
+        else:
+            return left
+
+    top_15_pairs['Pair'] = top_15_pairs['Pair'].apply(lambda s: _two_line_label(s))
+
     fig, ax = plt.subplots(figsize=(12, 8))
     sns.barplot(
         data=top_15_pairs,
@@ -92,6 +142,71 @@ def plot_product_affinity(df):
     ax.set_xlabel("Frequency (Times Purchased Together)")
     ax.set_ylabel("Product Pair")
     save_plot(fig, "3_product_affinity.png")
+
+
+def plot_product_affinity_top10(df):
+    """Plots the top 10 most frequent product pairs in a compact vertical layout."""
+    if df is None: return
+
+    top_10 = df.nlargest(10, 'PurchaseCount').copy()
+
+    # Use PairLabel if present, otherwise fall back to constructed pair text
+    if 'PairLabel' in top_10.columns:
+        top_10['Pair'] = top_10['PairLabel']
+    else:
+        if 'Item_A_Desc' in top_10.columns and 'Item_B_Desc' in top_10.columns:
+            top_10['Pair'] = (
+                top_10['Item_A_Desc'].fillna(top_10.get('Item_A', top_10.get('Item_A_Code', ''))).astype(str)
+                + "  +  " +
+                top_10['Item_B_Desc'].fillna(top_10.get('Item_B', top_10.get('Item_B_Code', ''))).astype(str)
+            )
+        else:
+            a_col = 'Item_A' if 'Item_A' in top_10.columns else ('Item_A_Code' if 'Item_A_Code' in top_10.columns else None)
+            b_col = 'Item_B' if 'Item_B' in top_10.columns else ('Item_B_Code' if 'Item_B_Code' in top_10.columns else None)
+            if a_col and b_col:
+                top_10['Pair'] = top_10[a_col].astype(str) + "  +  " + top_10[b_col].astype(str)
+            else:
+                top_10['Pair'] = top_10.index.astype(str)
+
+    # Two-line formatting helper (same logic as main affinity plot)
+    def _two_line_label(s, left_width=36, right_width=36):
+        if not isinstance(s, str):
+            s = str(s)
+        sep = None
+        for candidate in ['\n+\n', '\n+ ', '  +  ', ' + ', '+']:
+            if candidate in s:
+                sep = candidate
+                break
+        if sep is None:
+            left = s
+            right = ''
+        else:
+            left, right = s.split(sep, 1)
+        left = left.strip()
+        right = right.strip()
+        if len(left) > left_width:
+            left = left[:left_width-3] + '...'
+        if len(right) > right_width:
+            right = right[:right_width-3] + '...'
+        if right:
+            return f"{left}\n+ {right}"
+        else:
+            return left
+
+    top_10['Pair'] = top_10['Pair'].apply(lambda s: _two_line_label(s))
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.barplot(
+        data=top_10,
+        y='Pair',
+        x='PurchaseCount',
+        palette=SNS_PALETTE,
+        ax=ax
+    )
+    ax.set_title("Top 10 Co-Purchased Product Pairs", fontsize=14)
+    ax.set_xlabel("Frequency (Times Purchased Together)")
+    ax.set_ylabel("Product Pair")
+    save_plot(fig, "7_product_affinity_top10.png")
 
 def plot_return_rate(df):
     """Plots the top 15 products with the highest return rates."""
@@ -193,6 +308,7 @@ def main():
     plot_rfm(rfm_df)
     plot_aov_clv(aov_clv_df)
     plot_product_affinity(affinity_df)
+    plot_product_affinity_top10(affinity_df)
     plot_return_rate(return_df)
     plot_peak_times(hour_df, day_df)
     plot_purchase_cadence(cadence_df)

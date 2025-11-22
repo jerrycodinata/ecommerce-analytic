@@ -4,9 +4,10 @@ from pyspark.sql.functions import (
     col, to_timestamp, month, sum, avg, count, countDistinct,
     datediff, max, lit, lag, hour, dayofweek, when, abs, ntile
 )
+from pyspark.sql.functions import lower, substring, concat_ws
 
 # --- CONFIGURATION ---
-HDFS_INPUT_PATH = "hdfs://namenode:9000/data/ecommerce/cleaned_ecommerce.parquet"
+HDFS_INPUT_PATH = "hdfs://namenode:9000/data/ecommerce/ecommerce.parquet"
 OUTPUT_DIR_BASE = "/opt/scripts/results"
 
 # --- HELPER FUNCTIONS ---
@@ -87,8 +88,8 @@ def analyze_product_affinity(df):
     """
     print("Starting Product Affinity Analysis...")
     
-    # 1. We only need InvoiceNo and StockCode.
-    invoice_items = df.select("InvoiceNo", "StockCode").distinct()
+    # 1. We need InvoiceNo, StockCode and Description so we can show readable labels.
+    invoice_items = df.select("InvoiceNo", "StockCode", "Description").distinct()
     
     # 2. Self-join the dataframe on InvoiceNo
     # We create two "aliases" (views) of the same data
@@ -105,15 +106,43 @@ def analyze_product_affinity(df):
         "inner"
     )
     
-    # 3. Count pairs and order by most frequent
+    # 3. Count pairs and order by most frequent. Keep descriptions for readability.
     affinity_df = joined_df.groupBy(
-        col("a.StockCode").alias("Item_A"),
-        col("b.StockCode").alias("Item_B")
+        col("a.StockCode").alias("Item_A_Code"),
+        col("a.Description").alias("Item_A_Desc"),
+        col("b.StockCode").alias("Item_B_Code"),
+        col("b.Description").alias("Item_B_Desc")
     ).agg(
         count("*").alias("PurchaseCount")
     ).orderBy(col("PurchaseCount").desc())
 
-    save_output(affinity_df, "product_affinity")
+    # 4. Create readable labels: "Description (StockCode)" truncated for plotting
+    label_len = 40
+    affinity_df = affinity_df.withColumn(
+        "Item_A_Label",
+        when(
+            col("Item_A_Desc").isNull() | (col("Item_A_Desc") == ""),
+            col("Item_A_Code")
+        ).otherwise(
+            concat_ws(" ", substring(col("Item_A_Desc"), 1, label_len), concat_ws("", lit("("), col("Item_A_Code"), lit(")")))
+        )
+    ).withColumn(
+        "Item_B_Label",
+        when(
+            col("Item_B_Desc").isNull() | (col("Item_B_Desc") == ""),
+            col("Item_B_Code")
+        ).otherwise(
+            concat_ws(" ", substring(col("Item_B_Desc"), 1, label_len), concat_ws("", lit("("), col("Item_B_Code"), lit(")")))
+        )
+    ).withColumn(
+        "PairLabel",
+        concat_ws(" + ", col("Item_A_Label"), col("Item_B_Label"))
+    )
+
+    # Save a compact output including labels for plotting
+    save_output(affinity_df.select(
+        "Item_A_Code", "Item_A_Desc", "Item_B_Code", "Item_B_Desc", "PairLabel", "PurchaseCount"
+    ), "product_affinity")
 
 # --- ANALYSIS 5: Return Rate ---
 def analyze_return_rate(df):
@@ -246,7 +275,31 @@ def main():
                                    .filter(col("UnitPrice") > 0)
 
         # 2. Base for Return Rate: Needs negative quantities
-        return_analysis_df = df_with_sales.dropna(subset=["StockCode"])
+        # We keep negative quantities (returns) but remove non-product StockCodes
+        # and administrative descriptions (e.g., 'wrongly coded').
+        return_analysis_df = df_with_sales.dropna(subset=["StockCode"]) 
+
+        # --- Remove known non-product stock codes and prefixes ---
+        non_product_exact = {
+            'POST', 'D', 'M', 'BANK CHARGE', 'AMAZONFEE', 'CRUK', 'DOT', 'S',
+            'gift_0001_20'
+        }
+        non_product_prefixes = ('gift_', 'post', 'bank', 'amazonfee', 'fee', 'cruk')
+
+        # Filter out exact matches
+        return_analysis_df = return_analysis_df.filter(~col("StockCode").isin(list(non_product_exact)))
+
+        # Filter out prefix-based codes (case-insensitive)
+        prefix_cond = None
+        for p in non_product_prefixes:
+            cond = lower(col("StockCode")).startswith(p)
+            prefix_cond = cond if prefix_cond is None else (prefix_cond | cond)
+        if prefix_cond is not None:
+            return_analysis_df = return_analysis_df.filter(~prefix_cond)
+
+        # --- Remove administrative / error descriptions (case-insensitive) ---
+        admin_keywords_pattern = r'(manual|adjust|error|test|wrongly coded|incorrectly credited|broken|found|thrown away|gift card|postage|bank charge)'
+        return_analysis_df = return_analysis_df.filter(~lower(col("Description")).rlike(admin_keywords_pattern))
         
         print(f"Pre-processing complete. Caching analysis_df for performance...")
         analysis_df.cache() # Cache for faster re-use
