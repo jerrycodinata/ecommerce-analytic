@@ -6,7 +6,7 @@ from pyspark.sql.functions import (
 )
 
 # --- CONFIGURATION ---
-HDFS_INPUT_PATH = "hdfs://namenode:9000/data/ecommerce/ecommerce.parquet"
+HDFS_INPUT_PATH = "hdfs://namenode:9000/data/ecommerce/cleaned_ecommerce.parquet"
 OUTPUT_DIR_BASE = "/opt/scripts/results"
 
 # --- HELPER FUNCTIONS ---
