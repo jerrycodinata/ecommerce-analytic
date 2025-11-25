@@ -40,26 +40,24 @@ python -m pip install pandas pyarrow matplotlib seaborn
 
 If you use Spark locally, ensure the `spark-submit` on your PATH points to a Spark distribution.
 
-1. Prepare the data
-
-- Place the original dataset as `data/ecommerce.parquet`. If you only have the CSV, use `convert-to-parquet.py` (update as needed):
-
-```bash
-python convert-to-parquet.py
-```
-
-2. Set Docker Containers
+1. Set Docker Containers
 
 ```bash
 docker compose up -d
 ```
 
-3. Move Data to Hadoop
+2. Move Data to Hadoop
 
 ```bash
 docker exec -it namenode bash
 hdfs dfs -mkdir /data/ecommerce/
-hdfs dfs -put /data/ecommerce.parquet /data/ecommerce/
+hdfs dfs -put /data/ecommerce.csv /data/ecommerce/
+```
+
+Convert CSV data to parquet
+
+```bash
+docker exec spark-master /spark/bin/spark-submit /opt/scripts/conversion.py
 ```
 
 Run the PySpark job (example using local Spark):
